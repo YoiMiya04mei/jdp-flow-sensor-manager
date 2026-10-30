@@ -1,0 +1,86 @@
+version: "3.8"
+
+services:
+  # Next.js Web Application & API Server
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: jdp-noc-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=file:/app/data/jdp_noc.db
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:?CREDENTIAL_ENCRYPTION_KEY is required and must not be demo default}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required and must not be demo default}
+      - ROUTER_LIVE_EXECUTION_ENABLED=false
+      - ROUTER_PROVISIONING_ENABLED=false
+      - ROUTER_PHYSICAL_DRIVER_ENABLED=false
+      - ROUTER_ADAPTER_TYPE=mock
+      - ENABLE_LIVE_PROVISIONING=false
+      - ENABLE_DEV_SEED=false
+    volumes:
+      - jdp-data:/app/data
+    networks:
+      - jdp-internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # High-Performance UDP Flow Ingestion Daemon
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: collector
+    container_name: jdp-noc-collector
+    restart: unless-stopped
+    ports:
+      - "2055:2055/udp" # NetFlow v5 / v9
+      - "6343:6343/udp" # sFlow v5
+      - "9995:9995/udp" # IPFIX
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/data/jdp_noc.db
+      - FLOW_COLLECTOR_HOST=0.0.0.0
+      - FLOW_COLLECTOR_PORTS=2055,6343,9995
+      - FLOW_STALE_TIMEOUT_SECS=180
+    volumes:
+      - jdp-data:/app/data
+    networks:
+      - jdp-internal
+    depends_on:
+      - web
+
+  # Optional ClickHouse Analytics Node (target production profile, disabled by default in staging)
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: jdp-noc-clickhouse
+    restart: unless-stopped
+    profiles:
+      - clickhouse
+    ports:
+      - "8123:8123" # HTTP API
+      - "9000:9000" # Native TCP
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    networks:
+      - jdp-internal
+
+volumes:
+  jdp-data:
+    name: jdp-noc-data
+  clickhouse-data:
+    name: jdp-noc-clickhouse-data
+
+networks:
+  jdp-internal:
+    name: jdp-noc-network
+    driver: bridge
